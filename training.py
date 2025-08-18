@@ -1,0 +1,172 @@
+import os
+import sys
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data as data
+from tqdm import tqdm
+import argparse
+from PIL import Image
+import numpy as np
+from MedViT import MedViT_tiny, MedViT_small, MedViT_base, MedViT_large
+from torchvision import transforms
+
+# -----------------------
+# Model mapping
+# -----------------------
+model_classes = {
+    'MedViT_tiny': MedViT_tiny,
+    'MedViT_small': MedViT_small,
+    'MedViT_base': MedViT_base,
+    'MedViT_large': MedViT_large
+}
+
+# -----------------------
+# Custom Dataset
+# -----------------------
+class CustomSegDataset(data.Dataset):
+    def __init__(self, image_dir, mask_dir, transform=None):
+        self.image_dir = image_dir
+        self.mask_dir = mask_dir
+        self.transform = transform
+        self.images = sorted([f for f in os.listdir(image_dir) if f.lower().endswith(('.png','.jpg','.jpeg'))])
+        self.masks = sorted([f for f in os.listdir(mask_dir) if f.lower().endswith(('.png','.jpg','.jpeg'))])
+        assert len(self.images) == len(self.masks), "Number of images and masks do not match"
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.image_dir, self.images[idx])
+        mask_path = os.path.join(self.mask_dir, self.masks[idx])
+
+        image = Image.open(img_path).convert('RGB')
+        mask = Image.open(mask_path).convert('L')  # grayscale mask
+
+        if self.transform:
+            image = self.transform(image)
+            mask = self.transform(mask)
+
+        mask = torch.tensor(np.array(mask)/255.0, dtype=torch.float32).unsqueeze(0)  # normalize 0-1 and add channel dim
+        return image, mask
+
+# -----------------------
+# Dice loss function
+# -----------------------
+def dice_loss(pred, target, smooth=1e-6):
+    pred = torch.sigmoid(pred)
+    intersection = (pred * target).sum(dim=(2,3))
+    union = pred.sum(dim=(2,3)) + target.sum(dim=(2,3))
+    loss = 1 - (2*intersection + smooth)/(union + smooth)
+    return loss.mean()
+
+# -----------------------
+# IoU metric
+# -----------------------
+def iou_score(pred, target, threshold=0.5):
+    pred = torch.sigmoid(pred)
+    pred_bin = (pred > threshold).float()
+    intersection = (pred_bin * target).sum(dim=(2,3))
+    union = (pred_bin + target - pred_bin*target).sum(dim=(2,3))
+    iou = (intersection / (union + 1e-6)).mean()
+    return iou.item()
+
+# -----------------------
+# Training function
+# -----------------------
+def train_segmentation(epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path):
+    best_iou = 0.0
+    for epoch in range(epochs):
+        net.train()
+        running_loss = 0.0
+        train_bar = tqdm(train_loader, file=sys.stdout)
+        for images, masks in train_bar:
+            images, masks = images.to(device), masks.to(device)
+            optimizer.zero_grad()
+            outputs = net(images)
+            loss = dice_loss(outputs, masks)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            running_loss += loss.item()
+            train_bar.desc = f"Epoch[{epoch+1}/{epochs}] loss:{loss:.4f}"
+
+        # Validation
+        net.eval()
+        val_loss = 0.0
+        val_iou = 0.0
+        with torch.no_grad():
+            val_bar = tqdm(val_loader, file=sys.stdout)
+            for images, masks in val_bar:
+                images, masks = images.to(device), masks.to(device)
+                outputs = net(images)
+                val_loss += dice_loss(outputs, masks).item()
+                val_iou += iou_score(outputs, masks)
+
+        val_loss /= len(val_loader)
+        val_iou /= len(val_loader)
+
+        print(f"Epoch [{epoch+1}/{epochs}] Train Loss: {running_loss/len(train_loader):.4f} "
+              f"Val Loss: {val_loss:.4f} Val IoU: {val_iou:.4f}")
+
+        # Save best model
+        if val_iou > best_iou:
+            print("Saving best checkpoint...")
+            best_iou = val_iou
+            state = {
+                'model': net.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'lr_scheduler': scheduler.state_dict(),
+                'best_iou': best_iou,
+                'epoch': epoch,
+            }
+            torch.save(state, save_path)
+    print("Finished Training")
+
+# -----------------------
+# Main
+# -----------------------
+def main(args):
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Transform
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+
+    # Load dataset
+    train_dataset = CustomSegDataset(
+        image_dir=os.path.join(args.dataset, 'train/images'),
+        mask_dir=os.path.join(args.dataset, 'train/masks'),
+        transform=transform
+    )
+    val_dataset = CustomSegDataset(
+        image_dir=os.path.join(args.dataset, 'val/images'),
+        mask_dir=os.path.join(args.dataset, 'val/masks'),
+        transform=transform
+    )
+    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_loader = data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+
+    num_classes = 1  # binary segmentation
+
+    # Load model
+    model_class = model_classes.get(args.model_name)
+    net = model_class(num_classes=num_classes).to(device)
+
+    optimizer = optim.AdamW(net.parameters(), lr=args.lr, weight_decay=0.05)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs*len(train_loader), eta_min=1e-6)
+
+    save_path = f'./{args.model_name}_seg.pth'
+    train_segmentation(args.epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train MedViT for Segmentation")
+    parser.add_argument('--model_name', type=str, default='MedViT_tiny', help='Model name')
+    parser.add_argument('--dataset', type=str, required=True, help='Path to dataset folder')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    args = parser.parse_args()
+    main(args)
