@@ -13,6 +13,7 @@ from albumentations.pytorch import ToTensorV2
 from MedViT import MedViT_tiny, MedViT_small, MedViT_base, MedViT_large
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
+from MedVitSeg import MedViT2Seg 
 
 # -----------------------
 # Model mapping
@@ -52,35 +53,48 @@ class CustomSegDataset(data.Dataset):
             mask = augmented['mask']
 
         # mask [H,W] → [1,H,W]
-        mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)
+        mask = torch.tensor(mask, dtype=torch.long)
         return image, mask
 
 # -----------------------
 # Dice loss function
 # -----------------------
-def dice_loss(pred, target, smooth=1e-6):
-    pred = torch.sigmoid(pred)
-    intersection = (pred * target).sum(dim=(2,3))
-    union = pred.sum(dim=(2,3)) + target.sum(dim=(2,3))
-    loss = 1 - (2*intersection + smooth)/(union + smooth)
-    return loss.mean()
+# def dice_loss(pred, target, smooth=1e-6):
+#     pred = torch.sigmoid(pred)
+#     intersection = (pred * target).sum(dim=(2,3))
+#     union = pred.sum(dim=(2,3)) + target.sum(dim=(2,3))
+#     loss = 1 - (2*intersection + smooth)/(union + smooth)
+#     return loss.mean()
+
+criterion = nn.CrossEntropyLoss()
 
 # -----------------------
 # IoU metric
 # -----------------------
-def iou_score(pred, target, threshold=0.5):
-    pred = torch.sigmoid(pred)
-    pred_bin = (pred > threshold).float()
-    intersection = (pred_bin * target).sum(dim=(2,3))
-    union = (pred_bin + target - pred_bin*target).sum(dim=(2,3))
-    iou = (intersection / (union + 1e-6)).mean()
-    return iou.item()
+def iou_score(pred, target, num_classes=4):
+    pred_classes = torch.argmax(pred, dim=1)  # [B,H,W]
+    ious = []
+    for cls in range(num_classes):
+        pred_cls = (pred_classes == cls).float()
+        target_cls = (target == cls).float()
+        intersection = (pred_cls * target_cls).sum()
+        union = pred_cls.sum() + target_cls.sum() - intersection
+        if union == 0:
+            ious.append(torch.tensor(1.0, device=pred.device))  # tránh chia 0
+        else:
+            ious.append(intersection / union)
+    return torch.mean(torch.stack(ious)).item()
 
 # -----------------------
 # Training function
 # -----------------------
-def train_segmentation(epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path):
+# -----------------------
+# Training function (chỗ tính loss đổi lại)
+# -----------------------
+def train_segmentation(epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path, num_classes):
     best_iou = 0.0
+    criterion = nn.CrossEntropyLoss()
+
     for epoch in range(epochs):
         net.train()
         running_loss = 0.0
@@ -88,8 +102,8 @@ def train_segmentation(epochs, net, train_loader, val_loader, optimizer, schedul
         for images, masks in train_bar:
             images, masks = images.to(device), masks.to(device)
             optimizer.zero_grad()
-            outputs = net(images)
-            loss = dice_loss(outputs, masks)
+            outputs = net(images)  # [B, num_classes, H, W]
+            loss = criterion(outputs, masks)  # CE loss
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -105,8 +119,8 @@ def train_segmentation(epochs, net, train_loader, val_loader, optimizer, schedul
             for images, masks in val_bar:
                 images, masks = images.to(device), masks.to(device)
                 outputs = net(images)
-                val_loss += dice_loss(outputs, masks).item()
-                val_iou += iou_score(outputs, masks)
+                val_loss += criterion(outputs, masks).item()
+                val_iou += iou_score(outputs, masks, num_classes)
 
         val_loss /= len(val_loader)
         val_iou /= len(val_loader)
@@ -127,6 +141,7 @@ def train_segmentation(epochs, net, train_loader, val_loader, optimizer, schedul
             }
             torch.save(state, save_path)
     print("Finished Training")
+
 
 # -----------------------
 # Main
@@ -179,11 +194,12 @@ def main(args):
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
-    num_classes = 1  # binary segmentation
+    num_classes = 4  # binary segmentation
 
-    # Load model
     model_class = model_classes.get(args.model_name)
-    net = model_class(num_classes=num_classes).to(device)
+    backbone = model_class()  
+
+    net = MedViT2Seg(backbone, num_classes=num_classes).to(device)
 
     optimizer = optim.AdamW(net.parameters(), lr=args.lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs*len(train_loader), eta_min=1e-6)
