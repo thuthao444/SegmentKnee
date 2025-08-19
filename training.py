@@ -52,11 +52,23 @@ class CustomSegDataset(data.Dataset):
             image = augmented['image']
             mask = augmented['mask']
 
-        mask = torch.tensor(mask, dtype=torch.long)
+        # ---- Sửa ở đây ----
+        # Chuyển mask về long tensor
+        mask = torch.from_numpy(mask).long()
 
-        image = image.float() / 255.0  
+        # Nếu mask nhị phân 0/255, đổi 255 -> 1
+        mask[mask == 255] = 1
+
+        # Nếu multi-class, map các giá trị khác về 0..num_classes-1
+        # mapping = {0:0, 50:1, 100:2, 150:3}
+        # for k,v in mapping.items():
+        #     mask[mask==k] = v
+
+        # Chia image về 0..1
+        image = image.float() / 255.0
 
         return image, mask
+
 
 criterion = nn.CrossEntropyLoss()
 
