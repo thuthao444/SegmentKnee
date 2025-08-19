@@ -294,19 +294,29 @@ class LFP(nn.Module):
 
         self.patch_embed = PatchEmbed(in_channels, out_channels, stride)
         #self.mhca = MHCA(out_channels, head_dim)
-
+        
         self.norm1 = norm_layer(out_channels)
+        num_heads = out_channels // head_dim
         self.attn = NeighborhoodAttention(
-            embed_dim=out_channels,
-            num_heads=out_channels // head_dim,
+            dim=out_channels,   
             kernel_size=7,
-            stride=1,
-            dilation=1,
-            is_causal=False,
-            qkv_bias=True,
-            qk_scale=None,
-            proj_drop=0.0,
+            num_heads=num_heads,
+            dilation=1
         )
+
+        
+        # self.norm1 = norm_layer(out_channels)
+        # self.attn = NeighborhoodAttention(
+        #     embed_dim=out_channels,
+        #     num_heads=out_channels // head_dim,
+        #     kernel_size=7,
+        #     stride=1,
+        #     dilation=1,
+        #     is_causal=False,
+        #     qkv_bias=True,
+        #     qk_scale=None,
+        #     proj_drop=0.0,
+        # )
 
         self.attention_path_dropout = DropPath(path_dropout)
 
