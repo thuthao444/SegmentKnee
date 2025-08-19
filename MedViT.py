@@ -296,41 +296,17 @@ class LFP(nn.Module):
         #self.mhca = MHCA(out_channels, head_dim)
 
         self.norm1 = norm_layer(out_channels)
-        num_heads = out_channels // head_dim
-        try:
-            # API mới của natten >= 0.17
-            self.attn = NeighborhoodAttention(
-                out_channels,     # dim
-                7,                # kernel_size
-                num_heads,        # num_heads
-                1                 # dilation
-            )
-        except TypeError:
-            # API cũ của natten <= 0.14
-            self.attn = NeighborhoodAttention(
-                embed_dim=out_channels,
-                num_heads=num_heads,
-                kernel_size=7,
-                stride=1,
-                dilation=1,
-                is_causal=False,
-                qkv_bias=True,
-                qk_scale=None,
-                proj_drop=0.0,
-            )
-
-        # self.norm1 = norm_layer(out_channels)
-        # self.attn = NeighborhoodAttention(
-        #     embed_dim=out_channels,
-        #     num_heads=out_channels // head_dim,
-        #     kernel_size=7,
-        #     stride=1,
-        #     dilation=1,
-        #     is_causal=False,
-        #     qkv_bias=True,
-        #     qk_scale=None,
-        #     proj_drop=0.0,
-        # )
+        self.attn = NeighborhoodAttention(
+            embed_dim=out_channels,
+            num_heads=out_channels // head_dim,
+            kernel_size=7,
+            stride=1,
+            dilation=1,
+            is_causal=False,
+            qkv_bias=True,
+            qk_scale=None,
+            proj_drop=0.0,
+        )
 
         self.attention_path_dropout = DropPath(path_dropout)
 
