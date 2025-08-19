@@ -8,8 +8,11 @@ from tqdm import tqdm
 import argparse
 from PIL import Image
 import numpy as np
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 from MedViT import MedViT_tiny, MedViT_small, MedViT_base, MedViT_large
 from torchvision import transforms
+from sklearn.model_selection import train_test_split
 
 # -----------------------
 # Model mapping
@@ -40,14 +43,16 @@ class CustomSegDataset(data.Dataset):
         img_path = os.path.join(self.image_dir, self.images[idx])
         mask_path = os.path.join(self.mask_dir, self.masks[idx])
 
-        image = Image.open(img_path).convert('RGB')
-        mask = Image.open(mask_path).convert('L')  # grayscale mask
+        image = np.array(Image.open(img_path).convert('RGB'))
+        mask = np.array(Image.open(mask_path).convert('L'))
 
         if self.transform:
-            image = self.transform(image)
-            mask = self.transform(mask)
+            augmented = self.transform(image=image, mask=mask)
+            image = augmented['image']
+            mask = augmented['mask']
 
-        mask = torch.tensor(np.array(mask)/255.0, dtype=torch.float32).unsqueeze(0)  # normalize 0-1 and add channel dim
+        # mask [H,W] → [1,H,W]
+        mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)
         return image, mask
 
 # -----------------------
@@ -130,22 +135,47 @@ def main(args):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Transform
-    transform = transforms.Compose([
-        transforms.ToTensor(),
+    train_transform = A.Compose([
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.5),
+        A.RandomRotate90(p=0.15),   # xoay ngẫu nhiên ~15%
+        A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.0, p=0.5),
+        A.ToGray(p=0.15),  # chuyển grayscale với xác suất 15%
+        A.Resize(256, 256),  # resize về cùng kích thước
+        ToTensorV2(),
     ])
 
-    # Load dataset
+    val_transform = A.Compose([
+        A.Resize(256, 256),
+        ToTensorV2(),
+    ])
+
+    img_dir = os.path.join(args.dataset, "train")
+    mask_dir = os.path.join(args.dataset, "masks")
+    images = sorted([f for f in os.listdir(img_dir) if f.lower().endswith(('.png','.jpg','.jpeg'))])
+    masks = sorted([f for f in os.listdir(mask_dir) if f.lower().endswith(('.png','.jpg','.jpeg'))])
+
+    train_imgs, val_imgs, train_masks, val_masks = train_test_split(
+        images, masks, test_size=0.2, random_state=42
+    )
+
+    # dataset
     train_dataset = CustomSegDataset(
-        image_dir=os.path.join(args.dataset, 'train/images'),
-        mask_dir=os.path.join(args.dataset, 'train/masks'),
-        transform=transform
+        image_dir=img_dir,
+        mask_dir=mask_dir,
+        transform=train_transform
     )
+    train_dataset.images = train_imgs
+    train_dataset.masks = train_masks
+
     val_dataset = CustomSegDataset(
-        image_dir=os.path.join(args.dataset, 'val/images'),
-        mask_dir=os.path.join(args.dataset, 'val/masks'),
-        transform=transform
+        image_dir=img_dir,
+        mask_dir=mask_dir,
+        transform=val_transform
     )
+    val_dataset.images = val_imgs
+    val_dataset.masks = val_masks
+
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
