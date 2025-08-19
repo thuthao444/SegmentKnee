@@ -54,10 +54,11 @@ class CustomSegDataset(data.Dataset):
             mask = augmented['mask']
 
         # convert mask sang long tensor và clamp giá trị
-        mask = torch.from_numpy(mask).long()
-        mask = torch.clamp(mask, 0, self.num_classes-1)
-
-        # chuẩn hóa ảnh
+        if not isinstance(mask, torch.Tensor):
+            mask = torch.from_numpy(mask).long()
+        else:
+            mask = mask.long()
+            
         image = image.float() / 255.0
 
         return image, mask
