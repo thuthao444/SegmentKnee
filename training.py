@@ -205,7 +205,7 @@ def main(args):
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs*len(train_loader), eta_min=1e-6)
 
     save_path = f'./{args.model_name}_seg.pth'
-    train_segmentation(args.epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path)
+    train_segmentation(args.epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path, num_classes)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MedViT for Segmentation")
