@@ -65,21 +65,21 @@ class CustomSegDataset(data.Dataset):
 
 
 
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(ignore_index=0)
 
 # -----------------------
 # IoU metric
 # -----------------------
-def iou_score(pred, target, num_classes=4):
-    pred_classes = torch.argmax(pred, dim=1)  # [B,H,W]
+def iou_score(pred, target, num_classes=5):
+    pred_classes = torch.argmax(pred, dim=1)
     ious = []
-    for cls in range(num_classes):
+    for cls in range(1, num_classes):  # start từ 1, bỏ background
         pred_cls = (pred_classes == cls).float()
         target_cls = (target == cls).float()
         intersection = (pred_cls * target_cls).sum()
         union = pred_cls.sum() + target_cls.sum() - intersection
         if union == 0:
-            ious.append(torch.tensor(1.0, device=pred.device))  # tránh chia 0
+            ious.append(torch.tensor(1.0, device=pred.device))
         else:
             ious.append(intersection / union)
     return torch.mean(torch.stack(ious)).item()
@@ -89,7 +89,6 @@ def iou_score(pred, target, num_classes=4):
 # -----------------------
 def train_segmentation(epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path, num_classes):
     best_iou = 0.0
-    criterion = nn.CrossEntropyLoss()
 
     for epoch in range(epochs):
         net.train()
@@ -190,7 +189,7 @@ def main(args):
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
-    num_classes = 4  # binary segmentation
+    num_classes = 5  # binary segmentation
 
     model_class = model_classes.get(args.model_name)
     backbone = model_class()  
