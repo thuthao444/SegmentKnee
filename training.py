@@ -41,6 +41,7 @@ class CustomSegDataset(data.Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
+        # load ảnh và mask
         img_path = os.path.join(self.image_dir, self.images[idx])
         mask_path = os.path.join(self.mask_dir, self.masks[idx])
 
@@ -52,22 +53,15 @@ class CustomSegDataset(data.Dataset):
             image = augmented['image']
             mask = augmented['mask']
 
-        # ---- Sửa ở đây ----
-        # Chuyển mask về long tensor
+        # convert mask sang long tensor và clamp giá trị
         mask = torch.from_numpy(mask).long()
+        mask = torch.clamp(mask, 0, self.num_classes-1)
 
-        # Nếu mask nhị phân 0/255, đổi 255 -> 1
-        mask[mask == 255] = 1
-
-        # Nếu multi-class, map các giá trị khác về 0..num_classes-1
-        # mapping = {0:0, 50:1, 100:2, 150:3}
-        # for k,v in mapping.items():
-        #     mask[mask==k] = v
-
-        # Chia image về 0..1
+        # chuẩn hóa ảnh
         image = image.float() / 255.0
 
         return image, mask
+
 
 
 criterion = nn.CrossEntropyLoss()
