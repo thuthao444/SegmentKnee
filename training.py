@@ -52,19 +52,11 @@ class CustomSegDataset(data.Dataset):
             image = augmented['image']
             mask = augmented['mask']
 
-        # mask [H,W] → [1,H,W]
         mask = torch.tensor(mask, dtype=torch.long)
-        return image, mask
 
-# -----------------------
-# Dice loss function
-# -----------------------
-# def dice_loss(pred, target, smooth=1e-6):
-#     pred = torch.sigmoid(pred)
-#     intersection = (pred * target).sum(dim=(2,3))
-#     union = pred.sum(dim=(2,3)) + target.sum(dim=(2,3))
-#     loss = 1 - (2*intersection + smooth)/(union + smooth)
-#     return loss.mean()
+        image = image.float() / 255.0  
+
+        return image, mask
 
 criterion = nn.CrossEntropyLoss()
 
@@ -87,9 +79,6 @@ def iou_score(pred, target, num_classes=4):
 
 # -----------------------
 # Training function
-# -----------------------
-# -----------------------
-# Training function (chỗ tính loss đổi lại)
 # -----------------------
 def train_segmentation(epochs, net, train_loader, val_loader, optimizer, scheduler, device, save_path, num_classes):
     best_iou = 0.0
